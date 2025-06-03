@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowLeft, Upload, Save, X, User, Mail, MapPin, GraduationCap, DollarSign } from "lucide-react"
+import { ArrowLeft, Upload, Save, X, User, Mail, MapPin, GraduationCap, DollarSign, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { Separator } from "@/components/ui/separator"
@@ -21,12 +21,12 @@ interface Student {
   email: string
   address: string
   branch?: string
-  selectedCourses?: string[]
+  courses?: string[]
   feesAmount?: number
   feesPaid?: boolean
   imageUrl?: string
   attendance?: number
-  lastAttendance?: string
+  createdAt?: string
   status?: string
   class?: string
 }
@@ -38,42 +38,91 @@ interface StudentDetailsProps {
 }
 
 export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editedStudent, setEditedStudent] = useState<Student>(student)
+  const [fetchedStudent, setFetchedStudent] = useState<Student>(student)
+  const [selectedImage, setSelectedImage] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(student.imageUrl || null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedCourses, setSelectedCourses] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Available courses for selection
+  const availableCourses = [
+    "Mathematics",
+    "Physics",
+    "Chemistry",
+    "Data Structures and Algorithms",
+    "Operating Systems",
+    "Database Management Systems",
+    "Computer Networks",
+    "Graphics",
+    "Biology",
+    "Statistics",
+    "Machine Learning",
+    "Web Development",
+  ]
+
   useEffect(() => {
-    const fetchStudent = async () => {
+    const fetchStudentData = async () => {
       try {
+        setLoading(true)
+        setError(null)
+
         const response = await fetch(`/api/students/${student.id}`)
         if (!response.ok) {
-          throw new Error("Failed to fetch student data")
+          throw new Error(`Failed to fetch student data: ${response.status} ${response.statusText}`)
         }
+
         const data = await response.json()
+        setFetchedStudent(data)
         setEditedStudent(data)
         setImagePreview(data.imageUrl || null)
+
+        // Handle courses - whether they come as strings or objects, convert to strings
+        let courseNames: string[] = []
+        if (data.courses) {
+          courseNames = data.courses
+            .map((course: any) => {
+              if (typeof course === "string") {
+                return course
+              } else if (course && course.name) {
+                return course.name
+              }
+              return course
+            })
+            .filter(Boolean)
+        }
+        setSelectedCourses(courseNames)
+
         console.log("Fetched student data:", data)
+        console.log("Extracted course names:", courseNames)
       } catch (error) {
         console.error("Error fetching student data:", error)
+        setError(error instanceof Error ? error.message : "Failed to fetch student data")
+        // Fallback to the student data passed as prop
+        setFetchedStudent(student)
+        setEditedStudent(student)
+      } finally {
+        setLoading(false)
       }
     }
 
-    // fetchStudent();
-  })
+    fetchStudentData()
+  }, [student.id])
 
-  const [isEditing, setIsEditing] = useState(false)
-  const [editedStudent, setEditedStudent] = useState<Student>(student)
-  const [selectedImage, setSelectedImage] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(student.imageUrl || null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const handleCourseToggle = (courseName: string) => {
+    const updatedCourses = selectedCourses.includes(courseName)
+      ? selectedCourses.filter((c) => c !== courseName)
+      : [...selectedCourses, courseName]
 
-  console.log("Initial student data:", student)
+    setSelectedCourses(updatedCourses)
 
-  const handleCourseToggle = (course: string) => {
-    const currentCourses = editedStudent.selectedCourses || []
-    const updatedCourses = currentCourses.includes(course)
-      ? currentCourses.filter((c) => c !== course)
-      : [...currentCourses, course]
-
+    // Update the editedStudent with just the course names as strings
     setEditedStudent({
       ...editedStudent,
-      selectedCourses: updatedCourses,
+      courses: updatedCourses,
     })
   }
 
@@ -128,20 +177,134 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
     const updatedStudent = {
       ...editedStudent,
       imageUrl,
+      courses: selectedCourses, // Ensure courses are just strings
     }
+
+    // Console log the new data as requested
+    console.log("=== STUDENT UPDATE SUBMISSION ===")
+    console.log("Updated student data:", updatedStudent)
+    console.log("Original data:", fetchedStudent)
+    console.log("Courses (strings only):", selectedCourses)
+    console.log("Changes made:", {
+      original: fetchedStudent,
+      updated: updatedStudent,
+      differences: Object.keys(updatedStudent).reduce(
+        (diff, key) => {
+          const typedKey = key as keyof Student
+          const originalValue = fetchedStudent[typedKey]
+          const updatedValue = updatedStudent[typedKey]
+
+          if (JSON.stringify(originalValue) !== JSON.stringify(updatedValue)) {
+            diff[typedKey] = {
+              from: originalValue,
+              to: updatedValue,
+            }
+          }
+          return diff
+        },
+        {} as Record<keyof Student, { from: any; to: any }>,
+      ),
+    })
+
+    // Update the fetched student state to reflect the changes
+    setFetchedStudent(updatedStudent)
 
     // This will trigger the API call in the parent component
     onUpdate(updatedStudent)
     setIsEditing(false)
-    console.log("Student updated:", updatedStudent)
   }
 
   const handleCancel = () => {
-    setEditedStudent(student)
+    setEditedStudent(fetchedStudent)
     setSelectedImage(null)
-    setImagePreview(student.imageUrl || null)
+    setImagePreview(fetchedStudent.imageUrl || null)
+
+    // Reset selected courses from fetched data
+    let courseNames: string[] = []
+    if (fetchedStudent.courses) {
+      courseNames = fetchedStudent.courses
+        .map((course: any) => {
+          if (typeof course === "string") {
+            return course
+          } else if (course && course.name) {
+            return course.name
+          }
+          return course
+        })
+        .filter(Boolean)
+    }
+    setSelectedCourses(courseNames)
+
     setIsEditing(false)
   }
+
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return "N/A"
+    try {
+      return new Date(dateString).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    } catch {
+      return "Invalid date"
+    }
+  }
+
+  const getAttendanceStatus = (attendance: number) => {
+    if (attendance >= 90) return { color: "bg-green-500", status: "Excellent" }
+    if (attendance >= 75) return { color: "bg-orange-500", status: "Good" }
+    if (attendance >= 60) return { color: "bg-yellow-500", status: "Average" }
+    return { color: "bg-red-500", status: "Poor" }
+  }
+
+  // Get display courses - handle both string and object formats
+  const getDisplayCourses = (courses?: any[]) => {
+    if (!courses || courses.length === 0) return []
+    return courses
+      .map((course: any) => {
+        if (typeof course === "string") {
+          return course
+        } else if (course && course.name) {
+          return course.name
+        }
+        return course
+      })
+      .filter(Boolean)
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+          <span className="ml-2 text-gray-600">Loading student details...</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <Button variant="outline" size="sm" onClick={onBack} className="rounded-xl">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Students
+          </Button>
+        </div>
+        <div className="text-center py-12">
+          <p className="text-red-500 mb-4">{error}</p>
+          <Button variant="outline" onClick={() => window.location.reload()} className="rounded-xl">
+            Try Again
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  const attendanceInfo = getAttendanceStatus(fetchedStudent.attendance || 0)
+  const displayCourses = getDisplayCourses(fetchedStudent.courses)
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -154,9 +317,9 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
           </Button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">
-              {student.firstName} {student.lastName}
+              {fetchedStudent.firstName} {fetchedStudent.lastName}
             </h1>
-            <p className="text-gray-600">Student ID: {student.id}</p>
+            <p className="text-gray-600">Student ID: {fetchedStudent.id}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -194,7 +357,6 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
-                src={student.imageUrl || ""}
                 onChange={handleImageSelect}
                 className="hidden"
                 disabled={!isEditing}
@@ -245,15 +407,8 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm font-medium text-gray-600">Branch</span>
-                <Badge
-                  variant="outline"
-                  className={
-                    student.branch === "active"
-                      ? "border-green-200 text-green-800 bg-green-50"
-                      : "border-gray-200 text-gray-800 bg-gray-50"
-                  }
-                >
-                  {student.branch || "unknown"}
+                <Badge variant="outline" className="border-blue-200 text-blue-800 bg-blue-50">
+                  {fetchedStudent.branch || "Not specified"}
                 </Badge>
               </div>
 
@@ -262,18 +417,33 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                 <div className="flex items-center gap-2">
                   <div className="w-16 bg-gray-200 rounded-full h-2">
                     <div
-                      className={`h-2 rounded-full ${
-                        (student.attendance || 0) >= 90
-                          ? "bg-green-500"
-                          : (student.attendance || 0) >= 75
-                            ? "bg-orange-500"
-                            : "bg-red-500"
-                      }`}
-                      style={{ width: `${student.attendance || 0}%` }}
+                      className={`h-2 rounded-full ${attendanceInfo.color}`}
+                      style={{ width: `${fetchedStudent.attendance || 0}%` }}
                     />
                   </div>
-                  <span className="text-sm font-medium">{student.attendance || 0}%</span>
+                  <span className="text-sm font-medium">{fetchedStudent.attendance || 0}%</span>
                 </div>
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-600">Status</span>
+                <Badge
+                  variant="outline"
+                  className={
+                    attendanceInfo.status === "Excellent" || attendanceInfo.status === "Good"
+                      ? "border-green-200 text-green-800 bg-green-50"
+                      : attendanceInfo.status === "Average"
+                        ? "border-orange-200 text-orange-800 bg-orange-50"
+                        : "border-red-200 text-red-800 bg-red-50"
+                  }
+                >
+                  {attendanceInfo.status}
+                </Badge>
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-600">Joined</span>
+                <span className="text-sm">{formatDate(fetchedStudent.createdAt)}</span>
               </div>
             </div>
           </CardContent>
@@ -306,7 +476,7 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                       className="rounded-xl"
                     />
                   ) : (
-                    <p className="text-sm text-gray-900 mt-1">{student.firstName}</p>
+                    <p className="text-sm text-gray-900 mt-1">{fetchedStudent.firstName}</p>
                   )}
                 </div>
                 <div>
@@ -324,7 +494,7 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                       className="rounded-xl"
                     />
                   ) : (
-                    <p className="text-sm text-gray-900 mt-1">{student.lastName}</p>
+                    <p className="text-sm text-gray-900 mt-1">{fetchedStudent.lastName}</p>
                   )}
                 </div>
               </div>
@@ -348,7 +518,7 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                     className="rounded-xl"
                   />
                 ) : (
-                  <p className="text-sm text-gray-900 mt-1">{student.email}</p>
+                  <p className="text-sm text-gray-900 mt-1">{fetchedStudent.email}</p>
                 )}
               </div>
 
@@ -371,7 +541,7 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                     rows={3}
                   />
                 ) : (
-                  <p className="text-sm text-gray-900 mt-1">{student.address}</p>
+                  <p className="text-sm text-gray-900 mt-1">{fetchedStudent.address}</p>
                 )}
               </div>
             </CardContent>
@@ -409,33 +579,19 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                     </SelectContent>
                   </Select>
                 ) : (
-                  <p className="text-sm text-gray-900 mt-1">{student.branch || "Not specified"}</p>
+                  <p className="text-sm text-gray-900 mt-1">{fetchedStudent.branch || "Not specified"}</p>
                 )}
               </div>
 
               <div>
-                <Label htmlFor="class">Branch</Label>
-                <p className="text-sm text-gray-900 mt-1">{student.branch || "Not specified"}</p>
-              </div>
-
-              <div>
-                <Label>Enrolled Courses</Label>
+                <Label>Enrolled Courses ({displayCourses.length})</Label>
                 {isEditing ? (
-                  <div className="border rounded-xl p-4 space-y-2 max-h-32 overflow-y-auto mt-2">
-                    {[
-                      "Mathematics",
-                      "Physics",
-                      "Chemistry",
-                      "Data Structures and Algorithms",
-                      "Operating Systems",
-                      "Database Management Systems",
-                      "Computer Networks",
-                      "Graphics",
-                    ].map((course) => (
+                  <div className="border rounded-xl p-4 space-y-2 max-h-40 overflow-y-auto mt-2">
+                    {availableCourses.map((course) => (
                       <div key={course} className="flex items-center space-x-2">
                         <Checkbox
                           id={course}
-                          checked={(editedStudent.selectedCourses || []).includes(course)}
+                          checked={selectedCourses.includes(course)}
                           onCheckedChange={() => handleCourseToggle(course)}
                         />
                         <Label htmlFor={course} className="text-sm font-normal">
@@ -446,10 +602,10 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                   </div>
                 ) : (
                   <div className="mt-2">
-                    {student.selectedCourses && student.selectedCourses.length > 0 ? (
+                    {displayCourses.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
-                        {student.selectedCourses.map((course) => (
-                          <Badge key={course} variant="secondary" className="rounded-lg">
+                        {displayCourses.map((course, index) => (
+                          <Badge key={index} variant="secondary" className="rounded-lg">
                             {course}
                           </Badge>
                         ))}
@@ -492,8 +648,7 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                     />
                   ) : (
                     <p className="text-sm text-gray-900 mt-1">
-                      Rs.
-                      {student.feesAmount?.toLocaleString() || "Not specified"}
+                      Rs. {fetchedStudent.feesAmount?.toLocaleString() || "Not specified"}
                     </p>
                   )}
                 </div>
@@ -515,12 +670,12 @@ export function StudentDetails({ student, onBack, onUpdate }: StudentDetailsProp
                       <Badge
                         variant="outline"
                         className={
-                          student.feesPaid
+                          fetchedStudent.feesPaid
                             ? "border-green-200 text-green-800 bg-green-50"
                             : "border-red-200 text-red-800 bg-red-50"
                         }
                       >
-                        {student.feesPaid ? "Paid" : "Pending"}
+                        {fetchedStudent.feesPaid ? "Paid" : "Pending"}
                       </Badge>
                     </div>
                   )}

@@ -6,12 +6,12 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
+import { Badge, badgeVariants } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Plus, Eye, Edit, Upload, Filter, CheckCircle } from "lucide-react"
+import { Search, Plus, Eye, Edit, Upload, Filter, CheckCircle, Trash2 } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
@@ -19,7 +19,6 @@ import { X, User } from "lucide-react"
 import { StudentDetails } from "./student-details"
 import axios from "axios"
 
-// Define the student type based on server data
 interface Student {
   id: number
   firstName: string
@@ -66,14 +65,12 @@ export function StudentManagement() {
       try {
         setLoading(true)
         const response = await axios.get("/api/students")
-        // Ensure the response data is an array
         const studentsData = Array.isArray(response.data) ? response.data : []
         setStudents(studentsData)
-        console.log("Fetched students:", studentsData)
         setLoading(false)
       } catch (error) {
         console.error("Error fetching students:", error)
-        setStudents([]) // Ensure students is always an array even on error
+        setStudents([]) 
         setLoading(false)
       }
     }
@@ -81,7 +78,7 @@ export function StudentManagement() {
     fetchStudents()
   }, [])
 
-  // Filter students based on search term, class, and active tab
+  
   const filteredStudents = Array.isArray(students)
     ? students.filter((student) => {
         const fullName = `${student.firstName} ${student.lastName}`.toLowerCase()
@@ -228,6 +225,8 @@ export function StudentManagement() {
   // Handle update student from details component
   const handleUpdateStudent = async (updatedStudent: Student) => {
     try {
+      console.log("Updating student:", updatedStudent)
+     
       // API call to update student
       const response = await axios.put(`/api/students/${updatedStudent.id}`, updatedStudent)
       console.log("Student updated on server:", response.data)
@@ -254,6 +253,22 @@ export function StudentManagement() {
         onUpdate={handleUpdateStudent}
       />
     )
+  }
+
+  const deleteStudent = async (studentId: number) => {
+    console.log("Deleting student with ID:", studentId);
+    try {
+      // API call to delete student
+      await axios.delete(`/api/students/${studentId}`);
+      console.log(`Student with ID ${studentId} deleted successfully`);
+
+      // Update local state
+      setStudents((prev) => prev.filter((student) => student.id !== studentId));
+    } catch (error) {
+      console.error("Error deleting student:", error);
+      alert("Failed to delete student. Please try again.");
+    }
+
   }
 
   return (
@@ -549,32 +564,18 @@ export function StudentManagement() {
                           <span className="text-sm font-medium">{student.attendance || 0}%</span>
                         </div>
                       </TableCell>
-                      <TableCell>{student.feesPaid== true ? "true" : "false"}</TableCell>
+                      <TableCell ><Badge
+                                              variant="outline"
+                                              className={
+                                                student.feesPaid
+                                                  ? "border-green-200 text-green-800 bg-green-50"
+                                                  : "border-red-200 text-red-800 bg-red-50"
+                                              }
+                                            >
+                                              {student.feesPaid ? "Yes" : "No"}
+                                            </Badge></TableCell>
                     
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="rounded-lg h-8 px-2 text-green-600 border-green-200 hover:bg-green-50"
-                            onClick={() => handleAttendanceUpdate(student.id, true)}
-                            disabled={attendanceUpdating === student.id}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1" />
-                            Present
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="rounded-lg h-8 px-2 text-red-600 border-red-200 hover:bg-red-50"
-                            onClick={() => handleAttendanceUpdate(student.id, false)}
-                            disabled={attendanceUpdating === student.id}
-                          >
-                            <X className="w-4 h-4 mr-1" />
-                            Absent
-                          </Button>
-                        </div>
-                      </TableCell>
+                      
                       <TableCell>
                         <div className="flex gap-2">
                           <Button
@@ -585,6 +586,7 @@ export function StudentManagement() {
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
+
                           <Button
                             variant="outline"
                             size="sm"
@@ -592,6 +594,16 @@ export function StudentManagement() {
                             onClick={() => handleViewStudent(student)}
                           >
                             <Edit className="w-4 h-4" />
+                          </Button>
+
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-lg h-8 w-8 p-0"
+                            onClick={()=> deleteStudent(student.id)}
+                          >
+                            <Trash2 className="w-4 h-4" 
+                            />
                           </Button>
                         </div>
                       </TableCell>

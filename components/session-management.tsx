@@ -59,7 +59,7 @@ export function SessionManagement() {
     setActiveModule("face-attendance")
   }
 
-  const handleStartAttendance = (session) => {
+  const handleStartAttendance = (session:any) => {
     // Update session status to ongoing
     const updatedSessions = sessions.map((s) => (s.id === session.id ? { ...s, status: "ongoing" } : s))
     setSessions(updatedSessions)
