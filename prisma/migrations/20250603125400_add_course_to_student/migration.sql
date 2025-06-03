@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Student" ADD COLUMN     "attendance" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "feesAmount" DOUBLE PRECISION,
+ADD COLUMN     "feesPaid" BOOLEAN NOT NULL DEFAULT false;

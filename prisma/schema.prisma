@@ -1,0 +1,36 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Branch {
+  THANE
+  NERUL
+  BORIVALI
+  DADAR
+}
+
+model Course {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  students  Student[] @relation("StudentCourses")
+}
+
+model Student {
+  id         Int       @id @default(autoincrement())
+  firstName  String
+  lastName   String
+  email      String    @unique
+  address    String?
+  imageUrl   String?
+  branch     Branch
+  courses    Course[]  @relation("StudentCourses")
+  attendance Int       @default(0)  // total attendance count
+  feesPaid   Boolean   @default(false)
+  feesAmount Float?
+  createdAt  DateTime  @default(now())
+}
