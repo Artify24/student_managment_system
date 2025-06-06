@@ -20,17 +20,37 @@ model Course {
   students  Student[] @relation("StudentCourses")
 }
 
-model Student {
+model Session {
   id         Int       @id @default(autoincrement())
-  firstName  String
-  lastName   String
-  email      String    @unique
-  address    String?
-  imageUrl   String?
-  branch     Branch
-  courses    Course[]  @relation("StudentCourses")
-  attendance Int       @default(0)  // total attendance count
-  feesPaid   Boolean   @default(false)
-  feesAmount Float?
-  createdAt  DateTime  @default(now())
+  courseName String
+  date       DateTime  @default(now())
+  time       String
+
+  present    Student[] @relation("PresentInSessions")
+  absent     Student[] @relation("AbsentInSessions")
+
+  status     Boolean   @default(true)
 }
+
+model Student {
+  id              Int       @id @default(autoincrement())
+  firstName       String
+  lastName        String
+  email           String    @unique
+  address         String?
+  imageUrl        String?
+  branch          Branch
+  courses         Course[]  @relation("StudentCourses")
+  attendance      Int       @default(0)
+  absent          Int       @default(0)
+  feesPaid        Boolean   @default(false)
+  feesAmount      Float?
+  createdAt       DateTime  @default(now())
+
+  presentSessions Session[] @relation("PresentInSessions")
+  absentSessions  Session[] @relation("AbsentInSessions")
+}
+
+
+
+

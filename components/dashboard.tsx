@@ -1,180 +1,505 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { BookOpen, ClipboardCheck, GraduationCap, ChevronLeft, ChevronRight } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import {
+  BookOpen,
+  ClipboardCheck,
+  ChevronLeft,
+  ChevronRight,
+  Users,
+  TrendingUp,
+  CalendarIcon,
+  Clock,
+  Activity,
+  UserCheck,
+  UserX,
+  BarChart3,
+  Eye,
+  Plus,
+} from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import axios from "axios"
+import { useAppContext } from "@/lib/context"
 
-const recentAttendance = [
-  { id: "STU001", name: "Alice Johnson", time: "09:15 AM", status: "present", class: "CS-101" },
-  { id: "STU002", name: "Bob Smith", time: "09:18 AM", status: "present", class: "CS-101" },
-  { id: "STU003", name: "Carol Davis", time: "09:25 AM", status: "late", class: "CS-101" },
-  { id: "STU004", name: "David Wilson", time: "09:30 AM", status: "present", class: "MATH-201" },
-  { id: "STU005", name: "Eva Brown", time: "10:05 AM", status: "late", class: "MATH-201" },
-]
+interface Student {
+  id: number
+  firstName: string
+  lastName: string
+  email: string
+  address: string
+  imageUrl: string
+  branch: string
+  attendance: number
+  absent: number
+  feesPaid: boolean
+  feesAmount: number
+  createdAt: string
+}
 
-const upcomingSessions = [
-  { id: 1, title: "Advanced Algorithms", time: "2:00 PM", type: "Lesson" },
-  { id: 2, title: "Database Design", time: "3:30 PM", type: "Assignment" },
-  { id: 3, title: "Web Development", time: "4:00 PM", type: "Test" },
-  { id: 4, title: "Machine Learning", time: "5:15 PM", type: "Lesson" },
-]
+interface Session {
+  id: number
+  courseName: string
+  date: string
+  time: string
+  status: boolean
+  present: Student[]
+  absent: Student[]
+}
+
+interface RecentAttendanceRecord {
+  sessionId: number
+  courseName: string
+  studentName: string
+  time: string
+  status: "present" | "absent"
+  branch: string
+  date: string
+}
 
 export function Dashboard() {
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [todaySessions, setTodaySessions] = useState<Session[]>([])
+  const [recentAttendance, setRecentAttendance] = useState<RecentAttendanceRecord[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [currentDate, setCurrentDate] = useState(new Date())
+  const { setActiveModule, setActiveSession } = useAppContext()
+
+  // Fetch dashboard data
+  const fetchDashboardData = async () => {
+    try {
+      setIsLoading(true)
+
+      // Fetch today's sessions
+      const todayResponse = await axios.get("/api/session/today")
+      const todayData = Array.isArray(todayResponse.data) ? todayResponse.data : []
+      setTodaySessions(todayData)
+
+      // Fetch all sessions for statistics
+      const allResponse = await axios.get("/api/session")
+      const allData = Array.isArray(allResponse.data) ? allResponse.data : []
+      setSessions(allData)
+
+      // Generate recent attendance records
+      generateRecentAttendance(allData)
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error)
+      setSessions([])
+      setTodaySessions([])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Generate recent attendance records from sessions
+  const generateRecentAttendance = (sessionsData: Session[]) => {
+    const records: RecentAttendanceRecord[] = []
+
+    // Get recent sessions (last 10)
+    const recentSessions = sessionsData
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5)
+
+    recentSessions.forEach((session) => {
+      // Add present students
+      session.present.forEach((student) => {
+        records.push({
+          sessionId: session.id,
+          courseName: session.courseName,
+          studentName: `${student.firstName} ${student.lastName}`,
+          time: session.time,
+          status: "present",
+          branch: student.branch,
+          date: session.date,
+        })
+      })
+
+      // Add some absent students (limit to keep table manageable)
+      session.absent.slice(0, 2).forEach((student) => {
+        records.push({
+          sessionId: session.id,
+          courseName: session.courseName,
+          studentName: `${student.firstName} ${student.lastName}`,
+          time: session.time,
+          status: "absent",
+          branch: student.branch,
+          date: session.date,
+        })
+      })
+    })
+
+    // Sort by date and time, take most recent 10
+    const sortedRecords = records
+      .sort((a, b) => {
+        const dateA = new Date(`${a.date} ${a.time}`)
+        const dateB = new Date(`${b.date} ${b.time}`)
+        return dateB.getTime() - dateA.getTime()
+      })
+      .slice(0, 10)
+
+    setRecentAttendance(sortedRecords)
+  }
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  // Calculate statistics
+  const stats = {
+    totalSessions: sessions.length,
+    activeSessions: todaySessions.filter((s) => s.status === true).length,
+    completedSessions: sessions.filter((s) => s.status === false).length,
+    totalStudents: new Set([
+      ...sessions.flatMap((s) => s.present.map((st) => st.id)),
+      ...sessions.flatMap((s) => s.absent.map((st) => st.id)),
+    ]).size,
+    totalPresent: sessions.reduce((sum, s) => sum + s.present.length, 0),
+    totalAbsent: sessions.reduce((sum, s) => sum + s.absent.length, 0),
+    averageAttendance:
+      sessions.length > 0
+        ? Math.round(
+            (sessions.reduce((sum, s) => sum + s.present.length, 0) /
+              (sessions.reduce((sum, s) => sum + s.present.length + s.absent.length, 0) || 1)) *
+              100,
+          )
+        : 0,
+  }
+
+  // Get upcoming sessions (active sessions for today)
+  const upcomingSessions = todaySessions
+    .filter((s) => s.status === true)
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .slice(0, 4)
+
+  // Calendar functions
+  const getDaysInMonth = (date: Date) => {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+  }
+
+  const getFirstDayOfMonth = (date: Date) => {
+    const firstDay = new Date(date.getFullYear(), date.getMonth(), 1).getDay()
+    return firstDay === 0 ? 6 : firstDay - 1 // Convert Sunday (0) to 6, Monday (1) to 0, etc.
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    })
+  }
+
+  const formatTime = (timeString: string) => {
+    return timeString
+  }
+
+  const navigateMonth = (direction: "prev" | "next") => {
+    setCurrentDate((prev) => {
+      const newDate = new Date(prev)
+      if (direction === "prev") {
+        newDate.setMonth(prev.getMonth() - 1)
+      } else {
+        newDate.setMonth(prev.getMonth() + 1)
+      }
+      return newDate
+    })
+  }
+
+  const handleCreateSession = () => {
+    setActiveModule("sessions")
+  }
+
+  const handleViewReports = () => {
+    setActiveModule("reports")
+  }
+
+  const handleStartAttendance = (session: Session) => {
+    setActiveSession(session)
+    setActiveModule("face-attendance")
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="w-8 h-8 animate-spin rounded-full border-4 border-purple-600 border-t-transparent"></div>
+      </div>
+    )
+  }
+
   return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Dashboard</h1>
-        <p className="text-gray-600">Welcome to RKDemy Admin Panel</p>
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
+        <div>
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">Dashboard</h1>
+          <p className="text-gray-600 text-lg">Welcome to RKDemy Admin Panel - Real-time attendance insights</p>
+        </div>
+        <div className="flex gap-3">
+          <Button variant="outline" className="rounded-xl" onClick={handleViewReports}>
+            <BarChart3 className="w-4 h-4 mr-2" />
+            View Reports
+          </Button>
+          <Button
+            className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 rounded-xl"
+            onClick={handleCreateSession}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Session
+          </Button>
+        </div>
       </div>
 
       {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <Card className="overflow-hidden rounded-2xl border-0 shadow-sm">
-          <CardContent className="p-0">
-            <div className="bg-orange-50 p-6 relative">
-              <div className="absolute right-6 top-6 w-16 h-16 rounded-full bg-orange-200 flex items-center justify-center">
-                <BookOpen className="w-8 h-8 text-orange-500" />
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <Card className="overflow-hidden rounded-2xl border-0 shadow-lg bg-gradient-to-br from-blue-50 to-indigo-50">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Total Sessions</p>
+                <p className="text-3xl font-bold text-blue-600">{stats.totalSessions}</p>
+                <p className="text-sm text-gray-500">All time</p>
               </div>
-              <div className="w-24 h-24 rounded-full border-8 border-orange-200 flex items-center justify-center relative">
-                <div
-                  className="absolute inset-0 rounded-full border-8 border-orange-400"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 70%, 0 70%)" }}
-                ></div>
-                <span className="text-2xl font-bold text-gray-900">42</span>
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center">
+                <BookOpen className="w-6 h-6 text-white" />
               </div>
-              <h3 className="text-xl font-bold mt-4 text-gray-900">Lessons</h3>
-              <p className="text-sm text-gray-500">of 73 completed</p>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden rounded-2xl border-0 shadow-sm">
-          <CardContent className="p-0">
-            <div className="bg-pink-50 p-6 relative">
-              <div className="absolute right-6 top-6 w-16 h-16 rounded-full bg-pink-200 flex items-center justify-center">
-                <ClipboardCheck className="w-8 h-8 text-pink-500" />
+        <Card className="overflow-hidden rounded-2xl border-0 shadow-lg bg-gradient-to-br from-green-50 to-emerald-50">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Active Today</p>
+                <p className="text-3xl font-bold text-green-600">{stats.activeSessions}</p>
+                <p className="text-sm text-gray-500">Live sessions</p>
               </div>
-              <div className="w-24 h-24 rounded-full border-8 border-pink-200 flex items-center justify-center relative">
-                <div
-                  className="absolute inset-0 rounded-full border-8 border-pink-400"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 60%, 0 60%)" }}
-                ></div>
-                <span className="text-2xl font-bold text-gray-900">08</span>
+              <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl flex items-center justify-center">
+                <Activity className="w-6 h-6 text-white" />
               </div>
-              <h3 className="text-xl font-bold mt-4 text-gray-900">Assignments</h3>
-              <p className="text-sm text-gray-500">of 24 completed</p>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden rounded-2xl border-0 shadow-sm">
-          <CardContent className="p-0">
-            <div className="bg-green-50 p-6 relative">
-              <div className="absolute right-6 top-6 w-16 h-16 rounded-full bg-green-200 flex items-center justify-center">
-                <GraduationCap className="w-8 h-8 text-green-500" />
+        <Card className="overflow-hidden rounded-2xl border-0 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Total Students</p>
+                <p className="text-3xl font-bold text-purple-600">{stats.totalStudents}</p>
+                <p className="text-sm text-gray-500">Unique students</p>
               </div>
-              <div className="w-24 h-24 rounded-full border-8 border-green-200 flex items-center justify-center relative">
-                <div
-                  className="absolute inset-0 rounded-full border-8 border-green-400"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 80%, 0 80%)" }}
-                ></div>
-                <span className="text-2xl font-bold text-gray-900">03</span>
+              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
+                <Users className="w-6 h-6 text-white" />
               </div>
-              <h3 className="text-xl font-bold mt-4 text-gray-900">Tests</h3>
-              <p className="text-sm text-gray-500">of 15 completed</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="overflow-hidden rounded-2xl border-0 shadow-lg bg-gradient-to-br from-orange-50 to-amber-50">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Attendance Rate</p>
+                <p className="text-3xl font-bold text-orange-600">{stats.averageAttendance}%</p>
+                <p className="text-sm text-gray-500">Average</p>
+              </div>
+              <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-amber-500 rounded-xl flex items-center justify-center">
+                <TrendingUp className="w-6 h-6 text-white" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="rounded-2xl border-0 shadow-lg bg-gradient-to-r from-green-50 to-emerald-50">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center">
+                <UserCheck className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-green-600">{stats.totalPresent}</p>
+                <p className="text-sm text-gray-600">Total Present</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-0 shadow-lg bg-gradient-to-r from-red-50 to-rose-50">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-red-500 rounded-xl flex items-center justify-center">
+                <UserX className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-red-600">{stats.totalAbsent}</p>
+                <p className="text-sm text-gray-600">Total Absent</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-0 shadow-lg bg-gradient-to-r from-blue-50 to-cyan-50">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center">
+                <ClipboardCheck className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-blue-600">{stats.completedSessions}</p>
+                <p className="text-sm text-gray-600">Completed Sessions</p>
+              </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* My Courses / Recent Attendance */}
+        {/* Recent Attendance */}
         <div className="lg:col-span-2">
-          <Card className="rounded-2xl border-0 shadow-sm">
+          <Card className="rounded-2xl border-0 shadow-lg">
             <CardContent className="p-6">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold">Recent Attendance</h2>
-                <Tabs defaultValue="active">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-purple-600" />
+                  Recent Attendance
+                </h2>
+                <Tabs defaultValue="recent">
                   <TabsList className="bg-gray-100">
-                    <TabsTrigger value="active">Active</TabsTrigger>
-                    <TabsTrigger value="completed">Completed</TabsTrigger>
+                    <TabsTrigger value="recent">Recent</TabsTrigger>
+                    <TabsTrigger value="today">Today</TabsTrigger>
                   </TabsList>
                 </Tabs>
               </div>
 
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[100px]">#</TableHead>
-                    <TableHead>Student Name</TableHead>
-                    <TableHead>Class</TableHead>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentAttendance.map((record, index) => (
-                    <TableRow key={record.id}>
-                      <TableCell className="font-medium">{record.id}</TableCell>
-                      <TableCell>{record.name}</TableCell>
-                      <TableCell>{record.class}</TableCell>
-                      <TableCell>{record.time}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={
-                            record.status === "present"
-                              ? "border-green-200 text-green-800 bg-green-50"
-                              : "border-orange-200 text-orange-800 bg-orange-50"
-                          }
-                        >
-                          {record.status}
-                        </Badge>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-gray-200">
+                      <TableHead className="font-semibold">Session</TableHead>
+                      <TableHead className="font-semibold">Student</TableHead>
+                      <TableHead className="font-semibold">Course</TableHead>
+                      <TableHead className="font-semibold">Time</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {recentAttendance.map((record, index) => (
+                      <TableRow key={index} className="hover:bg-gray-50 transition-colors">
+                        <TableCell className="font-medium text-purple-600">#{record.sessionId}</TableCell>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium">{record.studentName}</p>
+                            <p className="text-sm text-gray-500">{record.branch}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-medium">{record.courseName}</TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            <p>{formatTime(record.time)}</p>
+                            <p className="text-gray-500">{formatDate(record.date)}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="outline"
+                            className={
+                              record.status === "present"
+                                ? "border-green-200 text-green-800 bg-green-50"
+                                : "border-red-200 text-red-800 bg-red-50"
+                            }
+                          >
+                            {record.status}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {recentAttendance.length === 0 && (
+                <div className="text-center py-8">
+                  <Activity className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">No recent attendance records</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
 
         {/* Calendar & Upcoming */}
-        <div className="space-y-8">
-          <Card className="rounded-2xl border-0 shadow-sm">
+        <div className="space-y-6">
+          {/* Calendar */}
+          <Card className="rounded-2xl border-0 shadow-lg">
             <CardContent className="p-6">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold">Calendar</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <CalendarIcon className="w-5 h-5 text-purple-600" />
+                  Calendar
+                </h2>
                 <div className="flex gap-2">
-                  <button className="p-1 rounded-full hover:bg-gray-100">
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <button className="p-1 rounded-full hover:bg-gray-100">
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
+                  <Button variant="ghost" size="sm" onClick={() => navigateMonth("prev")}>
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => navigateMonth("next")}>
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
                 </div>
               </div>
 
+              <div className="text-center mb-4">
+                <h3 className="font-semibold">
+                  {currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                </h3>
+              </div>
+
               <div className="grid grid-cols-7 text-center text-sm mb-2">
-                <div className="text-gray-500">Mo</div>
-                <div className="text-gray-500">Tu</div>
-                <div className="text-gray-500">We</div>
-                <div className="text-gray-500">Th</div>
-                <div className="text-gray-500">Fr</div>
-                <div className="text-gray-500">Sa</div>
-                <div className="text-gray-500">Su</div>
+                {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((day) => (
+                  <div key={day} className="text-gray-500 font-medium p-2">
+                    {day}
+                  </div>
+                ))}
               </div>
 
               <div className="grid grid-cols-7 gap-1 text-center">
-                {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
-                  const isActive = day === 23 || day === 27
+                {/* Empty cells for days before month starts */}
+                {Array.from({ length: getFirstDayOfMonth(currentDate) }, (_, i) => (
+                  <div key={`empty-${i}`} className="aspect-square"></div>
+                ))}
+
+                {/* Days of the month */}
+                {Array.from({ length: getDaysInMonth(currentDate) }, (_, i) => {
+                  const day = i + 1
+                  const isToday =
+                    currentDate.getMonth() === new Date().getMonth() &&
+                    currentDate.getFullYear() === new Date().getFullYear() &&
+                    day === new Date().getDate()
+
+                  // Check if there are sessions on this day
+                  const hasSession = todaySessions.some((session) => {
+                    const sessionDate = new Date(session.date)
+                    return (
+                      sessionDate.getDate() === day &&
+                      sessionDate.getMonth() === currentDate.getMonth() &&
+                      sessionDate.getFullYear() === currentDate.getFullYear()
+                    )
+                  })
+
                   return (
                     <div
                       key={day}
-                      className={`aspect-square flex items-center justify-center rounded-full text-sm ${
-                        isActive ? "bg-purple-600 text-white" : "hover:bg-gray-100"
+                      className={`aspect-square flex items-center justify-center rounded-full text-sm cursor-pointer transition-colors ${
+                        isToday
+                          ? "bg-purple-600 text-white font-bold"
+                          : hasSession
+                            ? "bg-blue-100 text-blue-600 font-medium"
+                            : "hover:bg-gray-100"
                       }`}
                     >
                       {day}
@@ -185,33 +510,50 @@ export function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border-0 shadow-sm">
+          {/* Upcoming Sessions */}
+          <Card className="rounded-2xl border-0 shadow-lg">
             <CardContent className="p-6">
-              <h2 className="text-xl font-bold mb-4">Upcoming</h2>
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-purple-600" />
+                Active Sessions
+              </h2>
               <div className="space-y-3">
                 {upcomingSessions.map((session) => (
-                  <div key={session.id} className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+                  <div
+                    key={session.id}
+                    className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-blue-50 hover:from-blue-50 hover:to-purple-50 transition-colors"
+                  >
                     <div className="text-center w-12">
-                      <div className="text-sm font-medium">29</div>
-                      <div className="text-xs text-gray-500">Sept</div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{session.title}</p>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            session.type === "Lesson"
-                              ? "bg-orange-500"
-                              : session.type === "Assignment"
-                                ? "bg-pink-500"
-                                : "bg-green-500"
-                          }`}
-                        ></span>
-                        <span className="text-xs text-gray-500">{session.type}</span>
+                      <div className="text-sm font-medium">{new Date().getDate()}</div>
+                      <div className="text-xs text-gray-500">
+                        {new Date().toLocaleDateString("en-US", { month: "short" })}
                       </div>
                     </div>
+                    <div className="flex-1">
+                      <p className="font-medium">{session.courseName}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                        <span className="text-xs text-gray-500">Active • {session.time}</span>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-lg"
+                      onClick={() => handleStartAttendance(session)}
+                    >
+                      <Eye className="w-3 h-3 mr-1" />
+                      View
+                    </Button>
                   </div>
                 ))}
+
+                {upcomingSessions.length === 0 && (
+                  <div className="text-center py-6">
+                    <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                    <p className="text-gray-500 text-sm">No active sessions today</p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

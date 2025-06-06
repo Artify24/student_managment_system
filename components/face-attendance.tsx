@@ -1,25 +1,58 @@
-"use client"
-
-import { useState, useEffect, useRef } from "react"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Camera, Play, Square, Settings, Users, CheckCircle, AlertCircle, Pause, UserPlus, Clock } from "lucide-react"
-import { useAppContext } from "@/lib/context"
+"use client";
+import { useState, useEffect, useRef } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Camera,
+  Play,
+  Users,
+  CheckCircle,
+  AlertCircle,
+  Pause,
+  UserPlus,
+  Clock,
+  Save,
+  X,
+  Video,
+  VideoOff,
+} from "lucide-react";
+import axios from "axios";
+import { Input } from "@/components/ui/input";
 
 interface AttendanceRecord {
-  id: string
-  name: string
-  confidence: number
-  status: string
-  time: string
-  photo?: string
-  method: "auto" | "manual"
+  id: string;
+  name: string;
+  confidence: number;
+  status: string;
+  time: string;
+  photo?: string;
+  method: "auto" | "manual";
 }
 
+interface PresentStudent {
+  id: string;
+  name: string;
+  method: "auto" | "manual";
+  timestamp: string;
+  confidence?: number;
+  photo?: string;
+}
+
+interface FaceAttendanceProps {
+  selectedSession?: any;
+  onBackToSessions?: () => void;
+}
+import { useAppContext } from "@/lib/context";
+import { LiveCamera } from "./live-camera";
 const availableStudents = [
   { id: "STU001", name: "Alice Johnson" },
   { id: "STU002", name: "Bob Smith" },
@@ -29,249 +62,606 @@ const availableStudents = [
   { id: "STU006", name: "Frank Miller" },
   { id: "STU007", name: "Grace Lee" },
   { id: "STU008", name: "Henry Chen" },
-]
+];
 
-export function FaceAttendance() {
-  const { sessions, activeSession, setActiveSession } = useAppContext()
-  const [isActive, setIsActive] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
-  const [selectedSession, setSelectedSession] = useState(activeSession)
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([])
-  const [currentRecognition, setCurrentRecognition] = useState<string | null>(null)
-  const [sessionDuration, setSessionDuration] = useState(0)
-  const [autoStopTimer, setAutoStopTimer] = useState<number | null>(null)
-  const [cameraError, setCameraError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isManualDialogOpen, setIsManualDialogOpen] = useState(false)
-  const [selectedStudentId, setSelectedStudentId] = useState("")
+export function FaceAttendance({
+  selectedSession,
+  onBackToSessions,
+}: FaceAttendanceProps) {
+  // get active session
+  const { activeSession } = useAppContext();
+  // Camera and session states
+  const [isActive, setIsActive] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [sessionDuration, setSessionDuration] = useState(0);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [currentRecognition, setCurrentRecognition] = useState<string | null>(
+    null
+  );
+  const [autoStopCountdown, setAutoStopCountdown] = useState<number | null>(
+    null
+  );
 
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  // Attendance states - optimized for better state management
+  const [presentStudents, setPresentStudents] = useState<PresentStudent[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<
+    AttendanceRecord[]
+  >([]);
 
-  // Update selected session when activeSession changes
+  // UI states
+  const [isManualDialogOpen, setIsManualDialogOpen] = useState(false);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [isSavingSession, setIsSavingSession] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+
+  // Refs
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const autoStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recognitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Initialize attendance records from session data
   useEffect(() => {
-    if (activeSession) {
-      setSelectedSession(activeSession)
+    if (selectedSession && selectedSession.present) {
+      const existingStudents = selectedSession.present.map(
+        (student: any, index: number) => ({
+          id: student.id || `STU00${index + 1}`,
+          name: student.name || `Student ${index + 1}`,
+          method: "auto" as const,
+          timestamp: new Date().toISOString(),
+          confidence: 95,
+        })
+      );
+
+      setPresentStudents(existingStudents);
+
+      const existingRecords = existingStudents.map(
+        (student: PresentStudent) => ({
+          id: student.id,
+          name: student.name,
+          confidence: student.confidence || 95,
+          status: "present",
+          time: new Date(student.timestamp).toLocaleTimeString(),
+          method: student.method,
+          photo: student.photo,
+        })
+      );
+
+      setAttendanceRecords(existingRecords);
     }
-  }, [activeSession])
+  }, [selectedSession]);
 
-  // Get available sessions (scheduled and ongoing)
-  const availableSessions = sessions.filter((s) => s.status === "scheduled" || s.status === "ongoing")
-
-  // Start webcam with simplified approach
   const startWebcam = async () => {
-    setIsLoading(true)
-    setCameraError(null)
+    setIsLoading(true);
+    setCameraError(null);
 
     try {
-      // Simple camera request
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
-      })
-
-      streamRef.current = stream
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play()
+      // Check if getUserMedia is supported
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error(
+          "Camera API not supported in this browser. Please use a modern browser like Chrome, Firefox, or Safari."
+        );
       }
 
-      setIsActive(true)
-      setIsPaused(false)
-      console.log("Camera started successfully")
-    } catch (error) {
-      console.error("Camera error:", error)
-      setCameraError("Camera access denied or not available. Please check permissions.")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+      // Try different camera configurations with fallbacks
+      const cameraConfigs = [
+        // High quality configuration
+        {
+          video: {
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
+            frameRate: { ideal: 30, min: 15 },
+            facingMode: "user",
+          },
+          audio: false,
+        },
+        // Medium quality fallback
+        {
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 15 },
+            facingMode: "user",
+          },
+          audio: false,
+        },
+        // Basic fallback
+        {
+          video: {
+            facingMode: "user",
+          },
+          audio: false,
+        },
+        // Simplest fallback
+        {
+          video: true,
+          audio: false,
+        },
+      ];
 
-  // Stop webcam
+      let stream: MediaStream | null = null;
+      let lastError: Error | null = null;
+
+      // Try each configuration until one works
+      for (const config of cameraConfigs) {
+        try {
+          console.log("Trying camera config:", config);
+          stream = await navigator.mediaDevices.getUserMedia(config);
+          console.log("Camera config successful:", config);
+          break;
+        } catch (error: any) {
+          console.log("Camera config failed:", config, error.message);
+          lastError = error;
+          continue;
+        }
+      }
+
+      if (!stream) {
+        throw (
+          lastError ||
+          new Error("Failed to access camera with any configuration")
+        );
+      }
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+
+        // Set up video event handlers
+        const video = videoRef.current;
+
+        const handleLoadedMetadata = () => {
+          console.log("Video metadata loaded");
+          console.log(
+            "Video dimensions:",
+            video.videoWidth,
+            "x",
+            video.videoHeight
+          );
+
+          video
+            .play()
+            .then(() => {
+              console.log("Video playback started successfully");
+              setIsActive(true);
+              setIsPaused(false);
+              setIsLoading(false);
+
+              // Start 10-second countdown
+              setAutoStopCountdown(10);
+
+              // Start countdown timer
+              countdownTimer.current = setInterval(() => {
+                setAutoStopCountdown((prev) => {
+                  if (prev === null || prev <= 1) {
+                    // Auto stop after 10 seconds
+                    stopWebcam();
+                    return null;
+                  }
+                  return prev - 1;
+                });
+              }, 1000);
+            })
+            .catch((playError) => {
+              console.error("Video play error:", playError);
+              setCameraError(
+                "Failed to start video playback. Please try again."
+              );
+              setIsLoading(false);
+            });
+        };
+
+        const handleVideoError = (e: Event) => {
+          console.error("Video element error:", e);
+          setCameraError("Video element encountered an error");
+          setIsLoading(false);
+        };
+
+        const handleVideoLoadError = () => {
+          console.error("Video failed to load");
+          setCameraError("Failed to load video stream");
+          setIsLoading(false);
+        };
+
+        // Add event listeners
+        video.addEventListener("loadedmetadata", handleLoadedMetadata);
+        video.addEventListener("error", handleVideoError);
+        video.addEventListener("abort", handleVideoLoadError);
+
+        // Cleanup function for event listeners
+        const cleanup = () => {
+          video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+          video.removeEventListener("error", handleVideoError);
+          video.removeEventListener("abort", handleVideoLoadError);
+        };
+
+        // Set a timeout in case metadata never loads
+        const metadataTimeout = setTimeout(() => {
+          cleanup();
+          setCameraError("Camera initialization timed out. Please try again.");
+          setIsLoading(false);
+        }, 10000); // 10 second timeout
+
+        // Clear timeout when metadata loads
+        video.addEventListener(
+          "loadedmetadata",
+          () => {
+            clearTimeout(metadataTimeout);
+            cleanup();
+          },
+          { once: true }
+        );
+      } else {
+        throw new Error("Video element not found");
+      }
+    } catch (error: any) {
+      console.error("Camera error:", error);
+      setIsLoading(false);
+
+      let errorMessage = "Camera access failed. ";
+
+      if (error.name === "NotAllowedError") {
+        errorMessage +=
+          "Please allow camera access in your browser and try again.";
+      } else if (error.name === "NotFoundError") {
+        errorMessage +=
+          "No camera found. Please connect a camera and try again.";
+      } else if (error.name === "NotReadableError") {
+        errorMessage +=
+          "Camera is already in use by another application. Please close other apps using the camera.";
+      } else if (error.name === "OverconstrainedError") {
+        errorMessage +=
+          "Camera doesn't support the requested settings. Trying with basic settings...";
+      } else if (error.name === "SecurityError") {
+        errorMessage += "Camera access blocked due to security settings.";
+      } else if (error.name === "TypeError") {
+        errorMessage += "Camera API not supported in this browser.";
+      } else {
+        errorMessage += error.message || "Unknown camera error occurred.";
+      }
+
+      setCameraError(errorMessage);
+      alert(`Camera Error: ${errorMessage}`);
+    }
+  };
+
   const stopWebcam = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop())
-      streamRef.current = null
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
-    setIsActive(false)
-    setIsPaused(false)
-    setCameraError(null)
-    if (autoStopTimer) {
-      clearTimeout(autoStopTimer)
-      setAutoStopTimer(null)
-    }
-  }
+    console.log("Stopping webcam...");
 
-  // Pause webcam
+    // Clear all timers
+    if (countdownTimer.current) {
+      clearInterval(countdownTimer.current);
+      countdownTimer.current = null;
+    }
+    if (autoStopTimer.current) {
+      clearTimeout(autoStopTimer.current);
+      autoStopTimer.current = null;
+    }
+    if (recognitionTimer.current) {
+      clearTimeout(recognitionTimer.current);
+      recognitionTimer.current = null;
+    }
+
+    // Stop camera stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        track.stop();
+        console.log("Camera track stopped:", track.label);
+      });
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setIsActive(false);
+    setIsPaused(false);
+    setCameraError(null);
+    setAutoStopCountdown(null);
+    setCurrentRecognition(null);
+
+    console.log("Camera stopped successfully");
+  };
+
   const pauseWebcam = () => {
     if (streamRef.current) {
       streamRef.current.getVideoTracks().forEach((track) => {
-        track.enabled = false
-      })
+        track.enabled = false;
+      });
     }
-    setIsPaused(true)
-  }
+    setIsPaused(true);
 
-  // Resume webcam
+    // Clear countdown when paused
+    if (countdownTimer.current) {
+      clearInterval(countdownTimer.current);
+      countdownTimer.current = null;
+    }
+    setAutoStopCountdown(null);
+
+    console.log("Camera paused");
+  };
+
   const resumeWebcam = () => {
     if (streamRef.current) {
       streamRef.current.getVideoTracks().forEach((track) => {
-        track.enabled = true
-      })
+        track.enabled = true;
+      });
     }
-    setIsPaused(false)
-  }
+    setIsPaused(false);
+    console.log("Camera resumed");
+  };
 
-  // Capture photo
   const capturePhoto = (): string => {
-    if (videoRef.current && canvasRef.current && videoRef.current.videoWidth > 0) {
-      const canvas = canvasRef.current
-      const video = videoRef.current
-      const context = canvas.getContext("2d")
+    if (
+      videoRef.current &&
+      canvasRef.current &&
+      videoRef.current.videoWidth > 0
+    ) {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      const context = canvas.getContext("2d");
 
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
 
       if (context) {
-        context.drawImage(video, 0, 0)
-        return canvas.toDataURL("image/jpeg", 0.8)
+        // Capture the actual video frame without flipping for storage
+        context.drawImage(video, 0, 0);
+        return canvas.toDataURL("image/jpeg", 0.9);
       }
     }
-    return ""
-  }
+    return "";
+  };
 
-  // Add manual attendance
-  const addManualAttendance = () => {
-    if (!selectedStudentId) {
-      alert("Please select a student")
-      return
+  const addStudentToPresent = (student: PresentStudent) => {
+    // Check if student is already present
+    const isAlreadyPresent = presentStudents.some((s) => s.id === student.id);
+    if (isAlreadyPresent) {
+      alert(`${student.name} is already marked as present.`);
+      return false;
     }
 
-    const student = availableStudents.find((s) => s.id === selectedStudentId)
-    if (!student) return
+    // Add to present students state
+    setPresentStudents((prev) => [...prev, student]);
 
-    // Check if student already marked present
-    const existingRecord = attendanceRecords.find((r) => r.id === student.id)
-    if (existingRecord) {
-      alert("Student already marked present")
-      return
-    }
-
+    // Add to attendance records for display
     const newRecord: AttendanceRecord = {
       id: student.id,
       name: student.name,
-      confidence: 100,
+      confidence: student.confidence || 100,
       status: "present",
-      time: new Date().toLocaleTimeString(),
-      method: "manual",
+      time: new Date(student.timestamp).toLocaleTimeString(),
+      photo: student.photo,
+      method: student.method,
+    };
+
+    setAttendanceRecords((prev) => [newRecord, ...prev]);
+    return true;
+  };
+
+  const addManualAttendance = async () => {
+    if (!selectedStudentId.trim()) {
+      alert("Please enter a student ID");
+      return;
     }
 
-    setAttendanceRecords((prev) => [newRecord, ...prev])
-    setSelectedStudentId("")
-    setIsManualDialogOpen(false)
-  }
+    // Find student by ID or create new entry
+    let student = availableStudents.find(
+      (s) => s.id === selectedStudentId.trim()
+    );
 
-  // Simulate student recognition and auto-stop
-  const simulateRecognition = () => {
-    const randomStudent = availableStudents[Math.floor(Math.random() * availableStudents.length)]
-    const confidence = Math.floor(Math.random() * 20) + 80 // 80-100%
+    if (!student) {
+      // If not found in available students, create a new entry with the provided ID
+      student = {
+        id: selectedStudentId.trim(),
+        name: `Student ${selectedStudentId.trim()}`,
+      };
+    }
 
-    // Check if student already marked present
-    const existingRecord = attendanceRecords.find((r) => r.id === randomStudent.id)
-    if (existingRecord) return
+    const newStudent: PresentStudent = {
+      id: student.id,
+      name: student.name,
+      method: "manual",
+      timestamp: new Date().toISOString(),
+      confidence: 100,
+    };
 
-    const photo = capturePhoto()
+    const success = addStudentToPresent(newStudent);
 
-    const newRecord: AttendanceRecord = {
+    if (success) {
+      setSelectedStudentId("");
+      setIsManualDialogOpen(false);
+      alert(`${student.name} marked as present`);
+    }
+  };
+
+  const simulateRecognition = async () => {
+    const randomStudent =
+      availableStudents[Math.floor(Math.random() * availableStudents.length)];
+    const confidence = Math.floor(Math.random() * 20) + 80;
+
+    // Check if already present
+    const isAlreadyPresent = presentStudents.some(
+      (s) => s.id === randomStudent.id
+    );
+    if (isAlreadyPresent) return;
+
+    const photo = capturePhoto();
+
+    const newStudent: PresentStudent = {
       id: randomStudent.id,
       name: randomStudent.name,
-      confidence,
-      status: "present",
-      time: new Date().toLocaleTimeString(),
-      photo,
       method: "auto",
+      timestamp: new Date().toISOString(),
+      confidence,
+      photo,
+    };
+
+    addStudentToPresent(newStudent);
+    setCurrentRecognition(randomStudent.name);
+
+    // Clear recognition after 3 seconds
+    recognitionTimer.current = setTimeout(() => {
+      setCurrentRecognition(null);
+    }, 3000);
+  };
+
+  const removeStudentFromPresent = (studentId: string) => {
+    const student = presentStudents.find((s) => s.id === studentId);
+    if (student && confirm(`Remove ${student.name} from present list?`)) {
+      setPresentStudents((prev) => prev.filter((s) => s.id !== studentId));
+      setAttendanceRecords((prev) => prev.filter((r) => r.id !== studentId));
+      alert("Student removed from present list");
+    }
+  };
+
+  const endSession = async () => {
+    if (presentStudents.length === 0) {
+      alert("No students are marked as present to save.");
+      return;
     }
 
-    setAttendanceRecords((prev) => [newRecord, ...prev])
-    setCurrentRecognition(randomStudent.name)
+    if (
+      !confirm(
+        `End session and save attendance for ${presentStudents.length} students?`
+      )
+    ) {
+      return;
+    }
 
-    // Auto-pause after recognition
-    setTimeout(() => {
-      pauseWebcam()
-      setCurrentRecognition(null)
-    }, 2000)
-  }
+    setIsSavingSession(true);
 
-  // Session timer
+    try {
+      // Stop camera if active
+      if (isActive) {
+        stopWebcam();
+      }
+
+      // Prepare data for API
+      const presentIds = presentStudents.map((s) => s.id);
+
+      console.log("Ending session with present IDs:", presentIds);
+
+      // Save to database
+      const response = await axios.put(
+        `http://localhost:3000/api/session/${activeSession?.id}/attendance`,
+        { presentIds }
+      );
+
+      console.log("Session ended and attendance saved:", response.data);
+
+      setSessionEnded(true);
+      alert(
+        `Session ended successfully! Attendance saved for ${presentStudents.length} students.`
+      );
+
+      // Optional: Navigate back to sessions after a delay
+      setTimeout(() => {
+        onBackToSessions?.();
+      }, 2000);
+    } catch (error) {
+      console.error("Error ending session:", error);
+      alert(
+        "Error ending session. Failed to save attendance data. Please try again."
+      );
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
+  };
+
+  const handleStartSession = async () => {
+    await startWebcam();
+    setSessionDuration(0);
+    setSessionEnded(false);
+  };
+
+  // Session duration timer
   useEffect(() => {
-    let interval: NodeJS.Timeout
-    if (isActive && selectedSession && !isPaused) {
+    let interval: NodeJS.Timeout;
+    if (isActive && !isPaused && !sessionEnded) {
       interval = setInterval(() => {
-        setSessionDuration((prev) => prev + 1)
-      }, 1000)
+        setSessionDuration((prev) => prev + 1);
+      }, 1000);
     }
-    return () => clearInterval(interval)
-  }, [isActive, selectedSession, isPaused])
+    return () => clearInterval(interval);
+  }, [isActive, isPaused, sessionEnded]);
 
   // Auto recognition simulation
   useEffect(() => {
-    if (isActive && !isPaused && selectedSession) {
-      const timeout = setTimeout(
-        () => {
-          if (Math.random() > 0.4) {
-            // 60% chance of recognition
-            simulateRecognition()
-          }
-        },
-        Math.random() * 5000 + 3000,
-      ) // 3-8 seconds
+    if (isActive && !isPaused && !sessionEnded && autoStopCountdown === null) {
+      const timeout = setTimeout(() => {
+        if (Math.random() > 0.5) {
+          simulateRecognition();
+        }
+      }, Math.random() * 4000 + 2000);
 
-      setAutoStopTimer(timeout)
-      return () => clearTimeout(timeout)
+      autoStopTimer.current = timeout;
+      return () => clearTimeout(timeout);
     }
-  }, [isActive, isPaused, selectedSession, attendanceRecords.length])
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
-
-  const handleStartSession = async () => {
-    if (!selectedSession) {
-      alert("Please select a session first")
-      return
-    }
-    await startWebcam()
-    setSessionDuration(0)
-    setAttendanceRecords([])
-  }
+  }, [
+    isActive,
+    isPaused,
+    attendanceRecords.length,
+    sessionEnded,
+    autoStopCountdown,
+  ]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
-    }
-  }, [])
+      if (countdownTimer.current) {
+        clearInterval(countdownTimer.current);
+      }
+      if (autoStopTimer.current) {
+        clearTimeout(autoStopTimer.current);
+      }
+      if (recognitionTimer.current) {
+        clearTimeout(recognitionTimer.current);
+      }
+    };
+  }, []);
 
   return (
     <div>
       <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Face Attendance</h1>
-          <p className="text-gray-600">AI-powered real-time attendance tracking</p>
+        <div className="flex items-center gap-4">
+          
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">
+              Live Face Attendance
+            </h1>
+            <p className="text-gray-600">
+              Real-time attendance tracking with live camera preview
+            </p>
+          </div>
         </div>
         <div className="flex gap-4">
-          <Dialog open={isManualDialogOpen} onOpenChange={setIsManualDialogOpen}>
+          <Dialog
+            open={isManualDialogOpen}
+            onOpenChange={setIsManualDialogOpen}
+          >
             <DialogTrigger asChild>
-              <Button variant="outline" className="rounded-xl">
+              <Button
+                variant="outline"
+                className="rounded-xl"
+                disabled={sessionEnded}
+              >
                 <UserPlus className="w-4 h-4 mr-2" />
                 Manual Entry
               </Button>
@@ -282,92 +672,98 @@ export function FaceAttendance() {
               </DialogHeader>
               <div className="space-y-4">
                 <div>
-                  <Label htmlFor="student">Select Student</Label>
-                  <Select value={selectedStudentId} onValueChange={setSelectedStudentId}>
-                    <SelectTrigger className="rounded-xl">
-                      <SelectValue placeholder="Choose a student" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableStudents
-                        .filter((student) => !attendanceRecords.find((r) => r.id === student.id))
-                        .map((student) => (
-                          <SelectItem key={student.id} value={student.id}>
-                            {student.name} ({student.id})
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="student">Enter Student ID</Label>
+                  <Input
+                    placeholder="Enter student ID..."
+                    value={selectedStudentId}
+                    onChange={(e) => setSelectedStudentId(e.target.value)}
+                    className="rounded-xl"
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter") {
+                        addManualAttendance();
+                      }
+                    }}
+                  />
                 </div>
-                <Button className="w-full bg-purple-600 hover:bg-purple-700 rounded-xl" onClick={addManualAttendance}>
+                <Button
+                  className="w-full bg-purple-600 hover:bg-purple-700 rounded-xl"
+                  onClick={addManualAttendance}
+                >
                   Mark Present
                 </Button>
               </div>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" className="rounded-xl">
-            <Settings className="w-4 h-4 mr-2" />
-            Camera Settings
+
+          {/* End Session Button */}
+          <Button
+            onClick={endSession}
+            disabled={
+              isSavingSession || sessionEnded || presentStudents.length === 0
+            }
+            className="bg-green-600 hover:bg-green-700 rounded-xl"
+          >
+            {isSavingSession ? (
+              <>
+                <div className="w-4 h-4 mr-2 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4 mr-2" />
+                End Session
+              </>
+            )}
           </Button>
+
         </div>
       </div>
 
-      {/* Session Selection */}
+      {/* Session Status Alert */}
+      {sessionEnded && (
+        <Card className="mb-6 rounded-2xl border-green-200 bg-green-50">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              <div>
+                <p className="font-medium text-green-800">
+                  Session Ended Successfully
+                </p>
+                <p className="text-sm text-green-600">
+                  Attendance data for {presentStudents.length} students has been
+                  saved to the database.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Session Info */}
       <Card className="mb-8 rounded-2xl border-0 shadow-sm">
         <CardContent className="p-6">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-6">
               <div>
-                <label className="text-sm font-medium text-gray-700">Select Session</label>
-                <Select
-                  value={selectedSession?.id || ""}
-                  onValueChange={(value) => {
-                    const session = availableSessions.find((s) => s.id === value)
-                    setSelectedSession(session || null)
-                    setActiveSession(session || null)
-                  }}
-                >
-                  <SelectTrigger className="w-64 rounded-xl">
-                    <SelectValue placeholder="Choose a session" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableSessions.map((session) => (
-                      <SelectItem key={session.id} value={session.id}>
-                        {session.title} - {session.class}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {selectedSession && (
-                <div className="text-sm text-gray-600">
-                  <p>
-                    <strong>Class:</strong> {selectedSession.class}
-                  </p>
-                  <p>
-                    <strong>Time:</strong> {selectedSession.time}
-                  </p>
-                  <p>
-                    <strong>Status:</strong>{" "}
-                    <Badge
-                      variant="outline"
-                      className={
-                        selectedSession.status === "ongoing"
-                          ? "border-blue-200 text-blue-800 bg-blue-50"
-                          : "border-orange-200 text-orange-800 bg-orange-50"
-                      }
-                    >
-                      {selectedSession.status}
-                    </Badge>
-                  </p>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {activeSession?.courseName || "Live Demo Session"}
+                </h3>
+                <div className="flex items-center gap-4 text-sm text-gray-600 mt-1">
+                  <div className="flex items-center gap-1">
+                    <Clock className="w-4 h-4" />
+                    <span>
+                      {activeSession?.time || new Date().toLocaleTimeString()}
+                    </span>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
 
             <div className="flex gap-2">
-              {!isActive ? (
+              {!isActive && !sessionEnded ? (
                 <Button
                   onClick={handleStartSession}
-                  disabled={!selectedSession || isLoading}
+                  disabled={isLoading}
                   className="bg-purple-600 hover:bg-purple-700 rounded-xl"
                 >
                   {isLoading ? (
@@ -377,148 +773,86 @@ export function FaceAttendance() {
                     </>
                   ) : (
                     <>
-                      <Play className="w-4 h-4 mr-2" />
-                      Start Camera
+                      <Video className="w-4 h-4 mr-2" />
+                      Start Live Camera
                     </>
                   )}
                 </Button>
-              ) : (
+              ) : !sessionEnded ? (
                 <>
                   {isPaused ? (
-                    <Button onClick={resumeWebcam} className="bg-green-600 hover:bg-green-700 rounded-xl">
+                    <Button
+                      onClick={resumeWebcam}
+                      className="bg-green-600 hover:bg-green-700 rounded-xl"
+                    >
                       <Play className="w-4 h-4 mr-2" />
                       Resume
                     </Button>
                   ) : (
-                    <Button onClick={pauseWebcam} className="bg-orange-600 hover:bg-orange-700 rounded-xl">
+                    <Button
+                      onClick={pauseWebcam}
+                      className="bg-orange-600 hover:bg-orange-700 rounded-xl"
+                    >
                       <Pause className="w-4 h-4 mr-2" />
                       Pause
                     </Button>
                   )}
-                  <Button onClick={stopWebcam} className="bg-red-600 hover:bg-red-700 rounded-xl">
-                    <Square className="w-4 h-4 mr-2" />
+                  <Button
+                    onClick={stopWebcam}
+                    className="bg-red-600 hover:bg-red-700 rounded-xl"
+                  >
+                    <VideoOff className="w-4 h-4 mr-2" />
                     Stop Camera
                   </Button>
                 </>
-              )}
+              ) : null}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Camera Feed */}
-        <div className="lg:col-span-2">
-          <Card className="h-[600px] rounded-2xl border-0 shadow-sm overflow-hidden">
-            <CardContent className="p-0 h-full relative">
-              {isActive && !cameraError ? (
-                <>
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover"
-                    style={{ transform: "scaleX(-1)" }}
-                  />
-                  <canvas ref={canvasRef} className="hidden" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <LiveCamera/>
+        
 
-                  {/* Status Overlay */}
-                  <div className="absolute top-4 left-4 right-4">
-                    <div className="flex justify-between items-center">
-                      <Badge className={`${isPaused ? "bg-orange-500" : "bg-green-500"} text-white animate-pulse`}>
-                        {isPaused ? "PAUSED" : "LIVE"}
-                      </Badge>
-                      <div className="bg-black bg-opacity-50 text-white px-3 py-1 rounded-lg text-sm">
-                        {formatTime(sessionDuration)}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Recognition Overlay */}
-                  {currentRecognition && (
-                    <div className="absolute top-16 left-4 right-4">
-                      <div className="bg-green-500 text-white p-4 rounded-xl shadow-lg animate-in slide-in-from-top">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle className="w-5 h-5" />
-                          <span className="font-medium">Student Recognized: {currentRecognition}</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Bottom Status */}
-                  <div className="absolute bottom-4 left-4 right-4">
-                    <div className="bg-black bg-opacity-50 text-white p-3 rounded-xl">
-                      <div className="flex justify-between items-center">
-                        <span>{isPaused ? "Camera Paused" : "Scanning for faces..."}</span>
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`w-2 h-2 rounded-full ${isPaused ? "bg-orange-500" : "bg-green-500 animate-pulse"}`}
-                          ></div>
-                          <span className="text-sm">{isPaused ? "Paused" : "AI Processing"}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="w-full h-full bg-gray-900 flex items-center justify-center">
-                  <div className="text-center">
-                    {cameraError ? (
-                      <>
-                        <AlertCircle className="w-24 h-24 text-red-500 mx-auto mb-4" />
-                        <p className="text-red-400 text-lg mb-2">Camera Error</p>
-                        <p className="text-gray-500 mb-4">{cameraError}</p>
-                        <p className="text-sm text-gray-400 mb-4">
-                          You can still use manual attendance entry while camera is unavailable
-                        </p>
-                        <Button onClick={() => setCameraError(null)} variant="outline" className="rounded-xl">
-                          Try Again
-                        </Button>
-                      </>
-                    ) : isLoading ? (
-                      <>
-                        <div className="w-24 h-24 mx-auto mb-4 animate-spin rounded-full border-4 border-gray-600 border-t-purple-600" />
-                        <p className="text-gray-400 text-lg">Starting Camera...</p>
-                        <p className="text-gray-500">Please allow camera access when prompted</p>
-                      </>
-                    ) : (
-                      <>
-                        <Camera className="w-24 h-24 text-gray-500 mx-auto mb-4" />
-                        <p className="text-gray-400 text-lg">Camera Inactive</p>
-                        <p className="text-gray-500 mb-4">Select a session and click "Start Camera"</p>
-                        <p className="text-sm text-gray-400">Or use manual attendance entry</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Attendance Log */}
+        {/* Present Students List */}
         <div>
           <Card className="h-[600px] rounded-2xl border-0 shadow-sm">
             <CardContent className="p-6">
               <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                 <Users className="w-5 h-5 text-purple-600" />
-                Session Attendance
-                {selectedSession && (
-                  <Badge variant="outline" className="ml-2">
-                    {selectedSession.class}
-                  </Badge>
-                )}
+                Present Students
+                <Badge variant="outline" className="ml-2">
+                  {presentStudents.length}
+                </Badge>
               </h2>
 
               <div className="space-y-4 max-h-[500px] overflow-y-auto">
                 {attendanceRecords.map((record, index) => (
-                  <div key={index} className="p-4 border rounded-xl bg-gray-50">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-900">{record.name}</span>
+                  <div
+                    key={index}
+                    className="p-4 border rounded-xl bg-gray-50 relative"
+                  >
+                    {!sessionEnded && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeStudentFromPresent(record.id)}
+                        className="absolute top-2 right-2 h-6 w-6 p-0 hover:bg-red-100"
+                      >
+                        <X className="w-3 h-3 text-red-500" />
+                      </Button>
+                    )}
+
+                    <div className="flex items-center justify-between mb-2 pr-8">
+                      <span className="font-medium text-gray-900">
+                        {record.name}
+                      </span>
                       <div className="flex gap-2">
-                        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                        <Badge
+                          variant="outline"
+                          className="bg-green-50 text-green-700 border-green-200"
+                        >
                           <CheckCircle className="w-3 h-3 mr-1" />
                           Present
                         </Badge>
@@ -556,7 +890,7 @@ export function FaceAttendance() {
                     <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                     <p className="text-gray-500">No attendance recorded yet</p>
                     <p className="text-sm text-gray-400">
-                      {selectedSession ? "Start the camera or use manual entry" : "Select a session first"}
+                      Start the live camera or use manual entry
                     </p>
                   </div>
                 )}
@@ -573,7 +907,9 @@ export function FaceAttendance() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Students Present</p>
-                <p className="text-2xl font-bold text-gray-900">{attendanceRecords.length}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {presentStudents.length}
+                </p>
               </div>
               <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
                 <CheckCircle className="w-6 h-6 text-green-600" />
@@ -588,7 +924,7 @@ export function FaceAttendance() {
               <div>
                 <p className="text-sm text-gray-600">Auto Detected</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {attendanceRecords.filter((r) => r.method === "auto").length}
+                  {presentStudents.filter((s) => s.method === "auto").length}
                 </p>
               </div>
               <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
@@ -604,7 +940,7 @@ export function FaceAttendance() {
               <div>
                 <p className="text-sm text-gray-600">Manual Entry</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {attendanceRecords.filter((r) => r.method === "manual").length}
+                  {presentStudents.filter((s) => s.method === "manual").length}
                 </p>
               </div>
               <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
@@ -619,7 +955,9 @@ export function FaceAttendance() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Session Duration</p>
-                <p className="text-2xl font-bold text-gray-900">{formatTime(sessionDuration)}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatTime(sessionDuration)}
+                </p>
               </div>
               <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
                 <Clock className="w-6 h-6 text-orange-600" />
@@ -629,5 +967,5 @@ export function FaceAttendance() {
         </Card>
       </div>
     </div>
-  )
+  );
 }

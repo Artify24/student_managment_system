@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,64 +9,175 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Calendar, Plus, Eye, Edit, Download, Clock } from "lucide-react"
+import { Calendar, Plus, Eye, Edit, Download, Clock, Users, UserCheck, UserX } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import axios from "axios"
 import { useAppContext } from "@/lib/context"
 
 export function SessionManagement() {
-  const { sessions, setSessions, setActiveSession, setActiveModule } = useAppContext()
+  const [sessions, setsessions] = useState<any[]>([])
   const [selectedStatus, setSelectedStatus] = useState("all")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [selectedSession, setSelectedSession] = useState<any>(null)
+  const { setActiveModule, setActiveSession } = useAppContext()
+
+  console.log("Sessions:", sessions)
+
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const response = await axios.get("/api/session/today")
+        const data = response
+        console.log("Fetched sessions:", data.data)
+        // Ensure data is an array
+        if (Array.isArray(data.data)) {
+          setsessions(data.data)
+        } else {
+          console.warn("API response is not an array:", data)
+          setsessions([])
+        }
+      } catch (error) {
+        console.error("Error fetching sessions:", error)
+      }
+    }
+
+    fetchSessions()
+  }, [])
 
   // Form state
   const [formData, setFormData] = useState({
-    title: "",
     class: "",
-    date: "",
     time: "",
-    duration: "",
   })
 
-  const filteredSessions = sessions.filter((session) => {
-    return selectedStatus === "all" || session.status === selectedStatus
-  })
+  const filteredSessions = Array.isArray(sessions)
+    ? sessions.filter((session) => {
+        if (selectedStatus === "all") return true
+        if (selectedStatus === "active") return session.status === true
+        if (selectedStatus === "completed") return session.status === false
+        return true
+      })
+    : []
 
-  const handleCreateSession = () => {
-    if (!formData.title || !formData.class || !formData.date || !formData.time || !formData.duration) {
+  const handleCreateSession = async () => {
+    if (!formData.class || !formData.time) {
       alert("Please fill in all fields")
       return
     }
-
-    const newSession = {
-      id: `SES${String(sessions.length + 1).padStart(3, "0")}`,
-      title: formData.title,
-      class: formData.class,
-      date: formData.date,
-      time: formData.time,
-      duration: `${formData.duration} hours`,
-      enrolled: Math.floor(Math.random() * 30) + 15, // Random enrolled count
-      attended: 0,
-      status: "scheduled",
-    }
-
-    const updatedSessions = [...sessions, newSession]
-    setSessions(updatedSessions)
-    setFormData({ title: "", class: "", date: "", time: "", duration: "" })
     setIsDialogOpen(false)
 
-    // Auto-navigate to face attendance with the new session
-    setActiveSession(newSession)
+    try {
+      const response = await axios.post("/api/session", {
+        courseName: formData.class,
+        time: formData.time,
+      })
+      const newSession = response.data
+      console.log("New session created:", newSession)
+
+      try {
+        const updatedResponse = await axios.get("/api/session/today")
+        const updatedData = updatedResponse.data
+        if (Array.isArray(updatedData)) {
+          setsessions(updatedData)
+        }
+      } catch (fetchError) {
+        console.error("Error fetching updated sessions:", fetchError)
+      }
+
+      // Close dialog and reset form
+      setFormData({ class: "", time: "" })
+    } catch (error) {
+      console.error("Error creating session:", error)
+      alert("Error creating session")
+    }
+  }
+
+  const handleStartAttendance = (session: any) => {
+    // This function can be implemented based on your navigation logic
+    console.log("Starting attendance for session:", session)
+    setActiveSession(session)
     setActiveModule("face-attendance")
   }
 
-  const handleStartAttendance = (session:any) => {
-    // Update session status to ongoing
-    const updatedSessions = sessions.map((s) => (s.id === session.id ? { ...s, status: "ongoing" } : s))
-    setSessions(updatedSessions)
+  const handleViewSession = (session: any) => {
+    setSelectedSession(session)
+    setIsViewDialogOpen(true)
+  }
 
-    // Set as active session and navigate to face attendance
-    setActiveSession({ ...session, status: "ongoing" })
-    setActiveModule("face-attendance")
+  const handleDownloadExcel = (session: any) => {
+    // Create Excel-like data structure
+    const excelData = {
+      sessionInfo: {
+        id: session.id,
+        courseName: session.courseName,
+        date: session.date,
+        time: session.time,
+        status: session.status,
+      },
+      presentStudents: session.present || [],
+      absentStudents: session.absent || [],
+    }
+
+    // Convert to CSV format for Excel compatibility
+    const csvContent = generateCSV(excelData)
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+    const link = document.createElement("a")
+    const url = URL.createObjectURL(blob)
+    link.setAttribute("href", url)
+    link.setAttribute(
+      "download",
+      `session_${session.id}_${session.courseName}_${new Date().toISOString().split("T")[0]}.csv`,
+    )
+    link.style.visibility = "hidden"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const generateCSV = (data: any) => {
+    let csv = ""
+
+    // Session Info
+    csv += "Session Information\n"
+    csv += `Session ID,${data.sessionInfo.id}\n`
+    csv += `Course Name,${data.sessionInfo.courseName}\n`
+    csv += `Date,${new Date(data.sessionInfo.date).toLocaleDateString()}\n`
+    csv += `Time,${data.sessionInfo.time}\n`
+    csv += `Status,${data.sessionInfo.status ? "Active" : "Completed"}\n`
+    csv += "\n"
+
+    // Present Students
+    csv += "Present Students\n"
+    csv += "ID,First Name,Last Name,Email,Address,Branch,Attendance,Absent,Fees Paid,Fees Amount,Created At\n"
+    data.presentStudents.forEach((student: any) => {
+      csv += `${student.id},${student.firstName},${student.lastName},${student.email},${student.address},${student.branch},${student.attendance},${student.absent},${student.feesPaid},${student.feesAmount},${new Date(student.createdAt).toLocaleDateString()}\n`
+    })
+    csv += "\n"
+
+    // Absent Students
+    csv += "Absent Students\n"
+    csv += "ID,First Name,Last Name,Email,Address,Branch,Attendance,Absent,Fees Paid,Fees Amount,Created At\n"
+    data.absentStudents.forEach((student: any) => {
+      csv += `${student.id},${student.firstName},${student.lastName},${student.email},${student.address},${student.branch},${student.attendance},${student.absent},${student.feesPaid},${student.feesAmount},${new Date(student.createdAt).toLocaleDateString()}\n`
+    })
+
+    return csv
+  }
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    return date.toLocaleDateString()
+  }
+
+  const getStatusDisplay = (status: boolean) => {
+    return status ? "Active" : "Completed"
+  }
+
+  const getStatusBadgeClass = (status: boolean) => {
+    return status ? "border-blue-200 text-blue-800 bg-blue-50" : "border-green-200 text-green-800 bg-green-50"
   }
 
   return (
@@ -89,40 +200,24 @@ export function SessionManagement() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label htmlFor="sessionTitle">Session Title</Label>
-                <Input
-                  id="sessionTitle"
-                  placeholder="Advanced Algorithms"
-                  className="rounded-xl"
-                  value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="sessionClass">Class</Label>
+                <Label htmlFor="sessionClass">Courses</Label>
                 <Select value={formData.class} onValueChange={(value) => setFormData({ ...formData, class: value })}>
                   <SelectTrigger className="rounded-xl">
                     <SelectValue placeholder="Select class" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="CS-101">CS-101</SelectItem>
-                    <SelectItem value="CS-201">CS-201</SelectItem>
-                    <SelectItem value="MATH-201">MATH-201</SelectItem>
-                    <SelectItem value="PHYS-301">PHYS-301</SelectItem>
+                    <SelectItem value="Mathematics">Mathematics</SelectItem>
+                    <SelectItem value="Physics">Physics</SelectItem>
+                    <SelectItem value="Maths">Maths</SelectItem>
+                    <SelectItem value="Data Structures and Algorithms">Data Structures and Algorithms</SelectItem>
+                    <SelectItem value="Operating Systems">Operating Systems</SelectItem>
+                    <SelectItem value="Database Management Systems">Database Management Systems</SelectItem>
+                    <SelectItem value="Computer Networks">Computer Networks</SelectItem>
+                    <SelectItem value="Graphics">Graphics</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="sessionDate">Date</Label>
-                  <Input
-                    id="sessionDate"
-                    type="date"
-                    className="rounded-xl"
-                    value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  />
-                </div>
                 <div>
                   <Label htmlFor="sessionTime">Time</Label>
                   <Input
@@ -134,17 +229,6 @@ export function SessionManagement() {
                   />
                 </div>
               </div>
-              <div>
-                <Label htmlFor="duration">Duration (hours)</Label>
-                <Input
-                  id="duration"
-                  type="number"
-                  placeholder="2"
-                  className="rounded-xl"
-                  value={formData.duration}
-                  onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
-                />
-              </div>
               <Button className="w-full bg-purple-600 hover:bg-purple-700 rounded-xl" onClick={handleCreateSession}>
                 Create Session & Start Attendance
               </Button>
@@ -152,6 +236,134 @@ export function SessionManagement() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* View Session Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-4xl rounded-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Session Details</DialogTitle>
+          </DialogHeader>
+          {selectedSession && (
+            <div className="space-y-6">
+              {/* Session Info */}
+              <Card className="rounded-xl">
+                <CardContent className="p-4">
+                  <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    Session Information
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <strong>Session ID:</strong> {selectedSession.id}
+                    </div>
+                    <div>
+                      <strong>Course:</strong> {selectedSession.courseName}
+                    </div>
+                    <div>
+                      <strong>Date:</strong> {formatDate(selectedSession.date)}
+                    </div>
+                    <div>
+                      <strong>Time:</strong> {selectedSession.time}
+                    </div>
+                    <div>
+                      <strong>Status:</strong>
+                      <Badge className={`ml-2 ${getStatusBadgeClass(selectedSession.status)}`}>
+                        {getStatusDisplay(selectedSession.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Present Students */}
+              <Card className="rounded-xl">
+                <CardContent className="p-4">
+                  <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                    <UserCheck className="w-5 h-5 text-green-600" />
+                    Present Students ({selectedSession.present?.length || 0})
+                  </h3>
+                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                    {selectedSession.present?.map((student: any) => (
+                      <div key={student.id} className="border rounded-lg p-3 bg-green-50">
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <strong>ID:</strong> {student.id}
+                          </div>
+                          <div>
+                            <strong>Name:</strong> {student.firstName} {student.lastName}
+                          </div>
+                          <div>
+                            <strong>Email:</strong> {student.email}
+                          </div>
+                          <div>
+                            <strong>Branch:</strong> {student.branch}
+                          </div>
+                          <div>
+                            <strong>Address:</strong> {student.address}
+                          </div>
+                          <div>
+                            <strong>Attendance:</strong> {student.attendance}
+                          </div>
+                          <div>
+                            <strong>Fees Paid:</strong> {student.feesPaid ? "Yes" : "No"}
+                          </div>
+                          <div>
+                            <strong>Fees Amount:</strong> ₹{student.feesAmount}
+                          </div>
+                        </div>
+                      </div>
+                    )) || <p className="text-gray-500">No present students</p>}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Absent Students */}
+              <Card className="rounded-xl">
+                <CardContent className="p-4">
+                  <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                    <UserX className="w-5 h-5 text-red-600" />
+                    Absent Students ({selectedSession.absent?.length || 0})
+                  </h3>
+                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                    {selectedSession.absent?.map((student: any) => (
+                      <div key={student.id} className="border rounded-lg p-3 bg-red-50">
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <strong>ID:</strong> {student.id}
+                          </div>
+                          <div>
+                            <strong>Name:</strong> {student.firstName} {student.lastName}
+                          </div>
+                          <div>
+                            <strong>Email:</strong> {student.email}
+                          </div>
+                          <div>
+                            <strong>Branch:</strong> {student.branch}
+                          </div>
+                          <div>
+                            <strong>Address:</strong> {student.address}
+                          </div>
+                          <div>
+                            <strong>Absent Count:</strong> {student.absent}
+                          </div>
+                          <div>
+                            <strong>Fees Paid:</strong> {student.feesPaid ? "Yes" : "No"}
+                          </div>
+                          <div>
+                            <strong>Fees Amount:</strong> ₹{student.feesAmount}
+                          </div>
+                        </div>
+                      </div>
+                    )) || <p className="text-gray-500">No absent students</p>}
+                  </div>
+                </CardContent>
+              </Card>
+
+             
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Card className="rounded-2xl border-0 shadow-sm">
         <CardContent className="p-6">
@@ -163,8 +375,7 @@ export function SessionManagement() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Sessions</SelectItem>
-                <SelectItem value="scheduled">Scheduled</SelectItem>
-                <SelectItem value="ongoing">Ongoing</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
@@ -181,10 +392,8 @@ export function SessionManagement() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[100px]">Session ID</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Class</TableHead>
+                <TableHead>Course Name</TableHead>
                 <TableHead>Date & Time</TableHead>
-                <TableHead>Duration</TableHead>
                 <TableHead>Attendance</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
@@ -194,59 +403,56 @@ export function SessionManagement() {
               {filteredSessions.map((session) => (
                 <TableRow key={session.id}>
                   <TableCell className="font-medium">{session.id}</TableCell>
-                  <TableCell>{session.title}</TableCell>
-                  <TableCell>{session.class}</TableCell>
+                  <TableCell>{session.courseName}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <Calendar className="w-4 h-4 text-gray-400" />
-                      <span>{session.date}</span>
+                      <span>{formatDate(session.date)}</span>
                       <Clock className="w-4 h-4 text-gray-400 ml-2" />
                       <span>{session.time}</span>
                     </div>
                   </TableCell>
-                  <TableCell>{session.duration}</TableCell>
                   <TableCell>
                     <div className="text-sm">
-                      <span className="font-medium">
-                        {session.attended}/{session.enrolled}
-                      </span>
-                      <div className="text-gray-500">
-                        {session.enrolled > 0 ? Math.round((session.attended / session.enrolled) * 100) : 0}% rate
-                      </div>
+                      <span className="font-medium">Present: {session.present.length}</span>
+                      <div className="text-gray-500">Absent: {session.absent.length}</div>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={
-                        session.status === "completed"
-                          ? "border-green-200 text-green-800 bg-green-50"
-                          : session.status === "ongoing"
-                            ? "border-blue-200 text-blue-800 bg-blue-50"
-                            : "border-orange-200 text-orange-800 bg-orange-50"
-                      }
-                    >
-                      {session.status}
+                    <Badge variant="outline" className={getStatusBadgeClass(session.status)}>
+                      {getStatusDisplay(session.status)}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="rounded-lg h-8 w-8 p-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-lg h-8 w-8 p-0"
+                        onClick={() => handleViewSession(session)}
+                        title="View session details"
+                      >
                         <Eye className="w-4 h-4" />
                       </Button>
                       <Button variant="outline" size="sm" className="rounded-lg h-8 w-8 p-0">
                         <Edit className="w-4 h-4" />
                       </Button>
-                      <Button variant="outline" size="sm" className="rounded-lg h-8 w-8 p-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-lg h-8 w-8 p-0"
+                        onClick={() => handleDownloadExcel(session)}
+                        title="Download as Excel"
+                      >
                         <Download className="w-4 h-4" />
                       </Button>
-                      {(session.status === "scheduled" || session.status === "ongoing") && (
+                      {session.status && (
                         <Button
                           size="sm"
                           className="bg-purple-600 hover:bg-purple-700 rounded-lg text-xs px-3"
                           onClick={() => handleStartAttendance(session)}
                         >
-                          {session.status === "scheduled" ? "Start Attendance" : "Continue"}
+                          Start Attendance
                         </Button>
                       )}
                     </div>

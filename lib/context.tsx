@@ -1,17 +1,36 @@
 "use client"
 
-import { createContext, useContext, useState, type ReactNode } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react"
+
+// Types based on API response
+interface Student {
+  id: number
+  firstName: string
+  lastName: string
+  email: string
+  address?: string
+  imageUrl?: string
+  branch: string
+  attendance: number
+  absent: number
+  feesPaid: boolean
+  feesAmount?: number
+  createdAt: string
+}
 
 interface Session {
-  id: string
-  title: string
-  class: string
+  id: number
+  courseName: string
   date: string
   time: string
-  status: string
-  duration?: string
-  enrolled?: number
-  attended?: number
+  present: Student[]
+  absent: Student[]
 }
 
 interface AppContextType {
@@ -23,45 +42,29 @@ interface AppContextType {
   setActiveModule: (module: string) => void
 }
 
-const initialSessions: Session[] = [
-  {
-    id: "SES001",
-    title: "Advanced Algorithms",
-    class: "CS-101",
-    date: "2024-01-15",
-    time: "09:00 AM",
-    status: "completed",
-    enrolled: 25,
-    attended: 23,
-  },
-  {
-    id: "SES002",
-    title: "Database Design",
-    class: "CS-201",
-    date: "2024-01-15",
-    time: "02:00 PM",
-    status: "completed",
-    enrolled: 18,
-    attended: 16,
-  },
-  {
-    id: "SES003",
-    title: "Linear Algebra",
-    class: "MATH-201",
-    date: "2024-01-16",
-    time: "10:00 AM",
-    status: "scheduled",
-    enrolled: 32,
-    attended: 0,
-  },
-]
-
 const AppContext = createContext<AppContextType | undefined>(undefined)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [activeModule, setActiveModule] = useState("dashboard")
-  const [sessions, setSessions] = useState<Session[]>(initialSessions)
+  const [sessions, setSessions] = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<Session | null>(null)
+  const [activeModule, setActiveModule] = useState("dashboard")
+
+  // Fetch sessions from API on mount
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const response = await fetch("/api/session/today")
+        if (!response.ok) throw new Error("Failed to fetch sessions")
+        const data: Session[] = await response.json()
+      console.log("Fetched sessions:", data)
+        setSessions(data)
+      } catch (error) {
+        console.error("Error fetching sessions:", error)
+      }
+    }
+
+    fetchSessions()
+  }, [])
 
   return (
     <AppContext.Provider
